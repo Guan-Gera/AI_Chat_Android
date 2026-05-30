@@ -429,19 +429,33 @@ class ChatViewModel(
         val model = repository.getModelWithKey(modelId)
             ?: error("模型配置不可用，请检查 API Key")
         val context = repository.getMessagesForPrompt(conversationId, cachedSettings.contextMessageLimit)
+        var lastPersistAt = 0L
+        var lastPersistedLength = 0
+
+        suspend fun persistAssistantContent(status: MessageStatus = MessageStatus.STREAMING, force: Boolean = false) {
+            val now = System.currentTimeMillis()
+            val shouldPersist = force ||
+                content.length - lastPersistedLength >= STREAM_PERSIST_CHARS ||
+                now - lastPersistAt >= STREAM_PERSIST_INTERVAL_MS
+            if (!shouldPersist) return
+            repository.updateAssistantContent(
+                assistantMessageId,
+                content.toString().ifBlank { if (status == MessageStatus.COMPLETE) "（没有收到内容）" else "" },
+                status,
+            )
+            lastPersistAt = now
+            lastPersistedLength = content.length
+        }
+
         repository.streamChat(model, context).collect { event ->
             when (event) {
                 is AiStreamEvent.Started -> Unit
                 is AiStreamEvent.Delta -> {
                     content.append(event.text)
-                    repository.updateAssistantContent(assistantMessageId, content.toString())
+                    persistAssistantContent()
                 }
                 is AiStreamEvent.Finished -> {
-                    repository.updateAssistantContent(
-                        assistantMessageId,
-                        content.toString().ifBlank { "（没有收到内容）" },
-                        MessageStatus.COMPLETE,
-                    )
+                    persistAssistantContent(MessageStatus.COMPLETE, force = true)
                 }
             }
         }
@@ -467,6 +481,8 @@ class ChatViewModel(
 
     companion object {
         private const val MAX_INPUT_LENGTH = 12_000
+        private const val STREAM_PERSIST_CHARS = 80
+        private const val STREAM_PERSIST_INTERVAL_MS = 120L
 
         fun factory(repository: ChatRepository): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {

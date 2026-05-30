@@ -1,6 +1,7 @@
 package com.aichat.app.ui
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,10 +13,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -64,6 +67,7 @@ import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -81,6 +85,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -348,52 +353,26 @@ private fun ChatScreen(
     onRegenerate: () -> Unit,
 ) {
     val clipboard = LocalClipboardManager.current
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                navigationIcon = {
-                    IconButton(onClick = onOpenDrawer) {
-                        Icon(Icons.Default.Menu, contentDescription = "历史记录")
-                    }
-                },
-                title = {
-                    ModelSelector(
-                        models = state.modelConfigs,
-                        selectedModelId = state.selectedModelId,
-                        onOpenModelPicker = onOpenModelPicker,
-                    )
-                },
-                actions = {
-                    IconButton(
-                        onClick = {
-                            clipboard.setText(AnnotatedString(exportConversationMarkdown(state.messages)))
-                        },
-                        enabled = state.messages.isNotEmpty(),
-                    ) {
-                        Icon(Icons.Default.ContentCopy, contentDescription = "复制当前对话")
-                    }
-                    IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Default.Settings, contentDescription = "设置")
-                    }
-                },
-            )
-        },
-        bottomBar = {
-            ChatInputBar(
-                text = state.inputText,
-                isSending = state.isSending,
-                enabled = state.modelConfigs.isNotEmpty(),
-                onTextChange = onInputChange,
-                onClearInput = onClearInput,
-                onSend = onSend,
-                onStop = onStop,
-            )
-        },
-    ) { padding ->
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background),
+    ) {
+        ChatHeader(
+            models = state.modelConfigs,
+            selectedModelId = state.selectedModelId,
+            hasMessages = state.messages.isNotEmpty(),
+            onOpenDrawer = onOpenDrawer,
+            onOpenModelPicker = onOpenModelPicker,
+            onCopyConversation = {
+                clipboard.setText(AnnotatedString(exportConversationMarkdown(state.messages)))
+            },
+            onOpenSettings = onOpenSettings,
+        )
         Box(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
+                .weight(1f)
+                .fillMaxWidth(),
         ) {
             if (state.messages.isEmpty()) {
                 EmptyChat(
@@ -408,6 +387,62 @@ private fun ChatScreen(
                 )
             }
         }
+        ChatInputBar(
+            text = state.inputText,
+            isSending = state.isSending,
+            enabled = state.modelConfigs.isNotEmpty(),
+            onTextChange = onInputChange,
+            onClearInput = onClearInput,
+            onSend = onSend,
+            onStop = onStop,
+        )
+    }
+}
+
+@Composable
+private fun ChatHeader(
+    models: List<ModelConfigEntity>,
+    selectedModelId: String?,
+    hasMessages: Boolean,
+    onOpenDrawer: () -> Unit,
+    onOpenModelPicker: () -> Unit,
+    onCopyConversation: () -> Unit,
+    onOpenSettings: () -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.background,
+        tonalElevation = 0.dp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .statusBarsPadding(),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp)
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onOpenDrawer) {
+                Icon(Icons.Default.Menu, contentDescription = "历史记录")
+            }
+            Box(modifier = Modifier.weight(1f)) {
+                ModelSelector(
+                    models = models,
+                    selectedModelId = selectedModelId,
+                    onOpenModelPicker = onOpenModelPicker,
+                )
+            }
+            IconButton(
+                onClick = onCopyConversation,
+                enabled = hasMessages,
+            ) {
+                Icon(Icons.Default.ContentCopy, contentDescription = "复制当前对话")
+            }
+            IconButton(onClick = onOpenSettings) {
+                Icon(Icons.Default.Settings, contentDescription = "设置")
+            }
+        }
     }
 }
 
@@ -418,11 +453,15 @@ private fun ModelSelector(
     onOpenModelPicker: () -> Unit,
 ) {
     val selected = models.firstOrNull { it.id == selectedModelId }
-    TextButton(onClick = onOpenModelPicker) {
+    TextButton(
+        onClick = onOpenModelPicker,
+        shape = RoundedCornerShape(24.dp),
+    ) {
         Text(
             text = selected?.displayName ?: "未配置模型",
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
+            fontWeight = FontWeight.SemiBold,
         )
         Icon(Icons.Default.KeyboardArrowDown, contentDescription = null)
     }
@@ -484,20 +523,21 @@ private fun EmptyChat(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(28.dp),
+            .padding(horizontal = 28.dp, vertical = 40.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
         Text(
-            text = if (hasModels) "开始新的对话" else "请先添加模型",
-            style = MaterialTheme.typography.headlineSmall,
+            text = if (hasModels) "今天想聊什么？" else "先添加一个模型",
+            style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.SemiBold,
             textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onSurface,
         )
         Spacer(modifier = Modifier.height(12.dp))
         Text(
             text = if (hasModels) {
-                "输入问题后即可开始聊天。"
+                "输入问题，或让 AI 帮你整理想法。"
             } else {
                 "在设置里填写 Base URL、API Key 和模型名称。"
             },
@@ -507,7 +547,7 @@ private fun EmptyChat(
         )
         if (!hasModels) {
             Spacer(modifier = Modifier.height(20.dp))
-            Button(onClick = onOpenSettings, shape = RoundedCornerShape(8.dp)) {
+            Button(onClick = onOpenSettings, shape = RoundedCornerShape(24.dp)) {
                 Icon(Icons.Default.Settings, contentDescription = null)
                 Spacer(modifier = Modifier.width(8.dp))
                 Text("打开设置")
@@ -523,18 +563,25 @@ private fun MessageList(
     onRegenerate: () -> Unit,
 ) {
     val listState = rememberLazyListState()
-    LaunchedEffect(messages.size, messages.lastOrNull()?.content) {
+    val lastMessage = messages.lastOrNull()
+    val lastStatus = lastMessage?.status
+    val streamingScrollBucket = if (lastStatus == MessageStatus.STREAMING.name) {
+        (lastMessage?.content.orEmpty().length / 220)
+    } else {
+        0
+    }
+    LaunchedEffect(messages.size, lastStatus, streamingScrollBucket) {
         if (messages.isNotEmpty()) {
             val lastVisibleIndex = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
             val shouldAutoScroll = messages.size <= 2 || lastVisibleIndex >= messages.lastIndex - 2
-            if (shouldAutoScroll) listState.animateScrollToItem(messages.lastIndex)
+            if (shouldAutoScroll) listState.scrollToItem(messages.lastIndex)
         }
     }
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
         items(messages, key = { it.id }) { message ->
             MessageBubble(
@@ -554,30 +601,43 @@ private fun MessageBubble(
 ) {
     val role = MessageRole.fromStored(message.role)
     val isUser = role == MessageRole.USER
+    val isStreaming = message.status == MessageStatus.STREAMING.name
     val clipboard = LocalClipboardManager.current
     var menuExpanded by remember { mutableStateOf(false) }
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = if (isUser) 0.dp else 2.dp),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
     ) {
         Column(
             horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
-            modifier = Modifier.fillMaxWidth(0.92f),
+            modifier = Modifier.fillMaxWidth(if (isUser) 0.84f else 1f),
         ) {
             Surface(
-                color = if (isUser) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
-                contentColor = if (isUser) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                shape = RoundedCornerShape(8.dp),
+                color = if (isUser) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                contentColor = if (isUser) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                shape = if (isUser) RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp) else RoundedCornerShape(0.dp),
             ) {
-                Column(modifier = Modifier.padding(14.dp)) {
+                Column(
+                    modifier = Modifier.padding(
+                        horizontal = if (isUser) 14.dp else 2.dp,
+                        vertical = if (isUser) 12.dp else 2.dp,
+                    ),
+                ) {
                     SelectionContainer {
                         val visibleContent = message.content.ifBlank {
-                            if (message.status == MessageStatus.STREAMING.name) "正在生成..." else ""
+                            if (isStreaming) "正在生成..." else ""
                         }
-                        if (isUser || visibleContent == "正在生成...") {
+                        if (isUser || isStreaming || visibleContent == "正在生成...") {
                             Text(
                                 text = visibleContent,
                                 style = MaterialTheme.typography.bodyLarge,
+                                color = if (isUser) {
+                                    MaterialTheme.colorScheme.onPrimaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface
+                                },
                             )
                         } else {
                             MarkdownMessage(content = visibleContent)
@@ -596,9 +656,14 @@ private fun MessageBubble(
             Box {
                 IconButton(
                     onClick = { menuExpanded = true },
-                    modifier = Modifier.size(40.dp),
+                    modifier = Modifier.size(32.dp),
                 ) {
-                    Icon(Icons.Default.MoreVert, contentDescription = "消息操作")
+                    Icon(
+                        Icons.Default.MoreVert,
+                        contentDescription = "消息操作",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                        modifier = Modifier.size(18.dp),
+                    )
                 }
                 DropdownMenu(
                     expanded = menuExpanded,
@@ -648,43 +713,82 @@ private fun ChatInputBar(
     onStop: () -> Unit,
 ) {
     Surface(
-        tonalElevation = 3.dp,
+        color = MaterialTheme.colorScheme.background,
+        tonalElevation = 0.dp,
         modifier = Modifier
             .fillMaxWidth()
-            .imePadding()
             .navigationBarsPadding(),
     ) {
-        Row(
+        Surface(
+            color = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(28.dp),
+            tonalElevation = 1.dp,
+            shadowElevation = 1.dp,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
-            verticalAlignment = Alignment.Bottom,
+                .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
-            OutlinedTextField(
-                value = text,
-                onValueChange = onTextChange,
-                enabled = enabled && !isSending,
-                placeholder = { Text(if (enabled) "输入消息" else "先添加模型") },
-                trailingIcon = {
-                    if (text.isNotBlank() && !isSending) {
-                        IconButton(onClick = onClearInput) {
-                            Icon(Icons.Default.Close, contentDescription = "清空输入")
-                        }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 12.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = onTextChange,
+                    enabled = enabled && !isSending,
+                    placeholder = { Text(if (enabled) "输入消息" else "先添加模型") },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        disabledContainerColor = Color.Transparent,
+                        focusedBorderColor = Color.Transparent,
+                        unfocusedBorderColor = Color.Transparent,
+                        disabledBorderColor = Color.Transparent,
+                    ),
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 44.dp, max = 160.dp),
+                    minLines = 1,
+                    maxLines = 6,
+                    shape = RoundedCornerShape(24.dp),
+                )
+                if (text.isNotBlank() && !isSending) {
+                    IconButton(
+                        onClick = onClearInput,
+                        modifier = Modifier.size(44.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "清空输入",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
-                },
-                modifier = Modifier.weight(1f),
-                minLines = 1,
-                maxLines = 8,
-                shape = RoundedCornerShape(8.dp),
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            if (isSending) {
-                IconButton(onClick = onStop) {
-                    Icon(Icons.Default.Stop, contentDescription = "停止")
                 }
-            } else {
-                IconButton(onClick = onSend, enabled = enabled && text.isNotBlank()) {
-                    Icon(Icons.Default.Send, contentDescription = "发送")
+                val canSend = enabled && text.isNotBlank()
+                val actionColor = when {
+                    isSending -> MaterialTheme.colorScheme.errorContainer
+                    canSend -> MaterialTheme.colorScheme.primary
+                    else -> MaterialTheme.colorScheme.surfaceVariant
+                }
+                val actionContentColor = when {
+                    isSending -> MaterialTheme.colorScheme.onErrorContainer
+                    canSend -> MaterialTheme.colorScheme.onPrimary
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                }
+                IconButton(
+                    onClick = if (isSending) onStop else onSend,
+                    enabled = isSending || canSend,
+                    modifier = Modifier
+                        .size(44.dp)
+                        .background(actionColor, RoundedCornerShape(22.dp)),
+                ) {
+                    Icon(
+                        if (isSending) Icons.Default.Stop else Icons.Default.Send,
+                        contentDescription = if (isSending) "停止" else "发送",
+                        tint = actionContentColor,
+                    )
                 }
             }
         }
@@ -794,7 +898,7 @@ private fun SettingsScreen(
             item {
                 SectionHeader(title = "关于")
                 Text(
-                    text = "AI Chat 0.3.0 · 手机优先交互、全屏模型编辑和云端 APK 打包。",
+                    text = "AI Chat 0.4.0 · Claude 风格手机界面、键盘适配和流式输出优化。",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
