@@ -17,6 +17,8 @@ import com.aichat.app.data.settings.AppSettingsStore
 import com.aichat.app.network.AiService
 import com.aichat.app.network.AiStreamEvent
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.withTimeout
 import java.util.UUID
 
 class ChatRepository(
@@ -106,6 +108,19 @@ class ChatRepository(
         touchConversation(message.conversationId)
     }
 
+    suspend fun updateUserMessage(messageId: Long, content: String) {
+        val message = dao.getMessage(messageId) ?: return
+        if (message.role != MessageRole.USER.name) return
+        dao.updateMessage(
+            message.copy(
+                content = content,
+                status = MessageStatus.COMPLETE.name,
+                errorMessage = null,
+            ),
+        )
+        touchConversation(message.conversationId)
+    }
+
     suspend fun deleteAssistantMessagesAfter(conversationId: Long, userMessageCreatedAt: Long) {
         dao.deleteMessagesAfter(conversationId, userMessageCreatedAt)
         touchConversation(conversationId)
@@ -122,6 +137,19 @@ class ChatRepository(
         model: ModelConfigWithKey,
         messages: List<ChatMessage>,
     ): Flow<AiStreamEvent> = aiService.streamChat(model, messages)
+
+    suspend fun testModelConnection(model: ModelConfigWithKey): String {
+        val content = StringBuilder()
+        withTimeout(MODEL_TEST_TIMEOUT_MS) {
+            aiService.streamChat(
+                model = model,
+                messages = listOf(ChatMessage(MessageRole.USER, "请只回复 OK，用最短文本。")),
+            ).collect { event ->
+                if (event is AiStreamEvent.Delta) content.append(event.text)
+            }
+        }
+        return content.toString().trim().take(120).ifBlank { "已收到响应" }
+    }
 
     suspend fun saveModelConfig(input: ModelConfigInput): String {
         require(input.displayName.isNotBlank()) { "请填写模型显示名称" }
@@ -225,5 +253,9 @@ class ChatRepository(
     private suspend fun touchConversation(conversationId: Long) {
         val conversation = dao.getConversation(conversationId) ?: return
         dao.updateConversation(conversation.copy(updatedAt = System.currentTimeMillis()))
+    }
+
+    private companion object {
+        const val MODEL_TEST_TIMEOUT_MS = 20_000L
     }
 }

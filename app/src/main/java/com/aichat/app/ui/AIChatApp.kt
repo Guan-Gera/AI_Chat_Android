@@ -1,5 +1,7 @@
 package com.aichat.app.ui
 
+import android.content.Context
+import android.content.Intent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -10,17 +12,24 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -87,6 +96,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -166,7 +176,9 @@ fun AIChatApp(viewModel: ChatViewModel) {
                         onSend = viewModel::sendMessage,
                         onStop = viewModel::stopGeneration,
                         onDeleteMessage = viewModel::deleteMessage,
+                        onEditUserMessage = viewModel::requestEditUserMessage,
                         onRegenerate = viewModel::regenerateLastAnswer,
+                        onContinueGeneration = viewModel::continueGeneration,
                     )
 
                     AppScreen.SETTINGS -> SettingsScreen(
@@ -210,6 +222,16 @@ fun AIChatApp(viewModel: ChatViewModel) {
                 onApplyPreset = viewModel::applyModelPreset,
                 onDismiss = viewModel::dismissModelEditor,
                 onSave = viewModel::saveModelEditor,
+                onTestConnection = viewModel::testModelEditorConnection,
+            )
+        }
+
+        state.editMessageDialog?.let { dialog ->
+            EditMessageDialog(
+                state = dialog,
+                onChange = viewModel::updateEditMessageContent,
+                onDismiss = viewModel::dismissEditMessage,
+                onSave = viewModel::confirmEditMessageAndRegenerate,
             )
         }
 
@@ -350,7 +372,9 @@ private fun ChatScreen(
     onSend: () -> Unit,
     onStop: () -> Unit,
     onDeleteMessage: (Long) -> Unit,
+    onEditUserMessage: (MessageEntity) -> Unit,
     onRegenerate: () -> Unit,
+    onContinueGeneration: () -> Unit,
 ) {
     val clipboard = LocalClipboardManager.current
     Column(
@@ -383,7 +407,9 @@ private fun ChatScreen(
                 MessageList(
                     messages = state.messages,
                     onDeleteMessage = onDeleteMessage,
+                    onEditUserMessage = onEditUserMessage,
                     onRegenerate = onRegenerate,
+                    onContinueGeneration = onContinueGeneration,
                 )
             }
         }
@@ -560,7 +586,9 @@ private fun EmptyChat(
 private fun MessageList(
     messages: List<MessageEntity>,
     onDeleteMessage: (Long) -> Unit,
+    onEditUserMessage: (MessageEntity) -> Unit,
     onRegenerate: () -> Unit,
+    onContinueGeneration: () -> Unit,
 ) {
     val listState = rememberLazyListState()
     val lastMessage = messages.lastOrNull()
@@ -587,7 +615,9 @@ private fun MessageList(
             MessageBubble(
                 message = message,
                 onDelete = { onDeleteMessage(message.id) },
+                onEdit = { onEditUserMessage(message) },
                 onRegenerate = onRegenerate,
+                onContinueGeneration = onContinueGeneration,
             )
         }
     }
@@ -597,11 +627,14 @@ private fun MessageList(
 private fun MessageBubble(
     message: MessageEntity,
     onDelete: () -> Unit,
+    onEdit: () -> Unit,
     onRegenerate: () -> Unit,
+    onContinueGeneration: () -> Unit,
 ) {
     val role = MessageRole.fromStored(message.role)
     val isUser = role == MessageRole.USER
     val isStreaming = message.status == MessageStatus.STREAMING.name
+    val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
     var menuExpanded by remember { mutableStateOf(false) }
     Row(
@@ -678,6 +711,17 @@ private fun MessageBubble(
                             menuExpanded = false
                         },
                     )
+                    if (isUser) {
+                        DropdownMenuItem(
+                            text = { Text("编辑并重发") },
+                            leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                            enabled = message.content.isNotBlank(),
+                            onClick = {
+                                menuExpanded = false
+                                onEdit()
+                            },
+                        )
+                    }
                     if (!isUser) {
                         DropdownMenuItem(
                             text = { Text("重新生成") },
@@ -687,7 +731,25 @@ private fun MessageBubble(
                                 onRegenerate()
                             },
                         )
+                        DropdownMenuItem(
+                            text = { Text("继续生成") },
+                            leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
+                            enabled = message.content.isNotBlank(),
+                            onClick = {
+                                menuExpanded = false
+                                onContinueGeneration()
+                            },
+                        )
                     }
+                    DropdownMenuItem(
+                        text = { Text("分享") },
+                        leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                        enabled = message.content.isNotBlank(),
+                        onClick = {
+                            menuExpanded = false
+                            shareText(context, message.content)
+                        },
+                    )
                     DropdownMenuItem(
                         text = { Text("删除") },
                         leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
@@ -717,7 +779,11 @@ private fun ChatInputBar(
         tonalElevation = 0.dp,
         modifier = Modifier
             .fillMaxWidth()
-            .navigationBarsPadding(),
+            .windowInsetsPadding(
+                WindowInsets.ime
+                    .union(WindowInsets.navigationBars)
+                    .only(WindowInsetsSides.Bottom),
+            ),
     ) {
         Surface(
             color = MaterialTheme.colorScheme.surface,
@@ -898,7 +964,7 @@ private fun SettingsScreen(
             item {
                 SectionHeader(title = "关于")
                 Text(
-                    text = "AI Chat 0.4.0 · Claude 风格手机界面、键盘适配和流式输出优化。",
+                    text = "AI Chat 0.5.0 · 修复键盘遮挡，支持编辑重发、继续生成和模型连接测试。",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -982,6 +1048,7 @@ private fun ModelEditorScreen(
     onApplyPreset: (ModelPreset) -> Unit,
     onDismiss: () -> Unit,
     onSave: () -> Unit,
+    onTestConnection: () -> Unit,
 ) {
     val clipboard = LocalClipboardManager.current
     var apiKeyVisible by remember { mutableStateOf(false) }
@@ -1147,6 +1214,25 @@ private fun ModelEditorScreen(
                     )
                     Text("设为默认模型")
                 }
+                OutlinedButton(
+                    onClick = onTestConnection,
+                    enabled = !state.isTestingConnection,
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (state.isTestingConnection) "正在测试连接..." else "测试模型连接")
+                }
+                state.connectionTestResult?.let { result ->
+                    Text(
+                        text = result,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (result.startsWith("连接成功")) {
+                            MaterialTheme.colorScheme.secondary
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        },
+                    )
+                }
                 Text(
                     text = protocolHint(state.protocol),
                     style = MaterialTheme.typography.bodySmall,
@@ -1155,6 +1241,44 @@ private fun ModelEditorScreen(
             }
         }
     }
+}
+
+@Composable
+private fun EditMessageDialog(
+    state: EditMessageDialogState,
+    onChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onSave: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("编辑并重发") },
+        text = {
+            OutlinedTextField(
+                value = state.content,
+                onValueChange = onChange,
+                placeholder = { Text("修改你的问题") },
+                minLines = 4,
+                maxLines = 10,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = onSave,
+                enabled = state.content.isNotBlank(),
+                shape = RoundedCornerShape(8.dp),
+            ) {
+                Text("重新生成")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        },
+    )
 }
 
 @Composable
@@ -1211,6 +1335,17 @@ private fun ConfirmActionDialog(
             }
         },
     )
+}
+
+private fun shareText(context: Context, text: String) {
+    val sendIntent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_TEXT, text)
+    }
+    val chooser = Intent.createChooser(sendIntent, "分享消息").apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    context.startActivity(chooser)
 }
 
 private fun protocolHint(protocol: ApiProtocol): String =

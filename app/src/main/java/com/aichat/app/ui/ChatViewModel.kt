@@ -8,8 +8,10 @@ import com.aichat.app.data.db.MessageEntity
 import com.aichat.app.data.db.ModelConfigEntity
 import com.aichat.app.data.model.ApiProtocol
 import com.aichat.app.data.model.AppSettings
+import com.aichat.app.data.model.MessageRole
 import com.aichat.app.data.model.MessageStatus
 import com.aichat.app.data.model.ModelConfigInput
+import com.aichat.app.data.model.ModelConfigWithKey
 import com.aichat.app.data.model.ModelPreset
 import com.aichat.app.data.model.ThemeMode
 import com.aichat.app.data.repository.ChatRepository
@@ -38,6 +40,7 @@ class ChatViewModel(
     private val activeScreen = MutableStateFlow(AppScreen.CHAT)
     private val modelEditor = MutableStateFlow<ModelEditorState?>(null)
     private val renameDialog = MutableStateFlow<RenameDialogState?>(null)
+    private val editMessageDialog = MutableStateFlow<EditMessageDialogState?>(null)
     private val confirmDialog = MutableStateFlow<ConfirmDialogState?>(null)
 
     private val conversations = repository.conversations
@@ -68,6 +71,7 @@ class ChatViewModel(
         activeScreen,
         modelEditor,
         renameDialog,
+        editMessageDialog,
         confirmDialog,
     ) { values ->
         ChatUiState(
@@ -84,7 +88,8 @@ class ChatViewModel(
             activeScreen = values[10] as AppScreen,
             modelEditor = values[11] as ModelEditorState?,
             renameDialog = values[12] as RenameDialogState?,
-            confirmDialog = values[13] as ConfirmDialogState?,
+            editMessageDialog = values[13] as EditMessageDialogState?,
+            confirmDialog = values[14] as ConfirmDialogState?,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ChatUiState())
 
@@ -248,6 +253,98 @@ class ChatViewModel(
         }
     }
 
+    fun requestEditUserMessage(message: MessageEntity) {
+        if (MessageRole.fromStored(message.role) != MessageRole.USER || isSending.value) return
+        editMessageDialog.value = EditMessageDialogState(
+            messageId = message.id,
+            conversationId = message.conversationId,
+            createdAt = message.createdAt,
+            content = message.content,
+        )
+    }
+
+    fun updateEditMessageContent(content: String) {
+        editMessageDialog.value = editMessageDialog.value?.copy(content = content.take(MAX_INPUT_LENGTH))
+    }
+
+    fun dismissEditMessage() {
+        editMessageDialog.value = null
+    }
+
+    fun confirmEditMessageAndRegenerate() {
+        val dialog = editMessageDialog.value ?: return
+        val editedContent = dialog.content.trim()
+        if (editedContent.isBlank() || isSending.value) return
+        val modelId = selectedModelId.value
+        if (modelId == null) {
+            errorMessage.value = "请先选择模型"
+            return
+        }
+        editMessageDialog.value = null
+        currentConversationId.value = dialog.conversationId
+        sendJob = viewModelScope.launch {
+            isSending.value = true
+            var assistantMessageId: Long? = null
+            val content = StringBuilder()
+            try {
+                repository.updateUserMessage(dialog.messageId, editedContent)
+                repository.deleteAssistantMessagesAfter(dialog.conversationId, dialog.createdAt)
+                assistantMessageId = repository.insertAssistantPlaceholder(dialog.conversationId)
+                generateAssistantResponse(dialog.conversationId, assistantMessageId, modelId, content)
+            } catch (cancellation: CancellationException) {
+                assistantMessageId?.let { id ->
+                    if (content.isBlank()) {
+                        repository.deleteMessage(id)
+                    } else {
+                        repository.updateAssistantContent(id, content.toString(), MessageStatus.COMPLETE)
+                    }
+                }
+            } catch (throwable: Throwable) {
+                val message = throwable.message ?: "编辑重发失败"
+                assistantMessageId?.let { id ->
+                    repository.markAssistantError(id, content.toString().ifBlank { "编辑重发失败。" }, message)
+                }
+                errorMessage.value = message
+            } finally {
+                isSending.value = false
+                sendJob = null
+            }
+        }
+    }
+
+    fun continueGeneration() {
+        val conversationId = currentConversationId.value ?: return
+        val modelId = selectedModelId.value ?: return
+        if (isSending.value) return
+        sendJob = viewModelScope.launch {
+            isSending.value = true
+            var assistantMessageId: Long? = null
+            val content = StringBuilder()
+            try {
+                repository.insertUserMessage(conversationId, CONTINUE_PROMPT)
+                assistantMessageId = repository.insertAssistantPlaceholder(conversationId)
+                generateAssistantResponse(conversationId, assistantMessageId, modelId, content)
+            } catch (cancellation: CancellationException) {
+                assistantMessageId?.let { id ->
+                    if (content.isBlank()) {
+                        repository.deleteMessage(id)
+                    } else {
+                        repository.updateAssistantContent(id, content.toString(), MessageStatus.COMPLETE)
+                    }
+                }
+            } catch (throwable: Throwable) {
+                val message = throwable.message ?: "继续生成失败"
+                assistantMessageId?.let { id ->
+                    repository.markAssistantError(id, content.toString().ifBlank { "继续生成失败。" }, message)
+                }
+                errorMessage.value = message
+            } finally {
+                isSending.value = false
+                sendJob = null
+            }
+        }
+    }
+
     fun requestRenameConversation(conversation: ConversationEntity) {
         renameDialog.value = RenameDialogState(conversation.id, conversation.title)
     }
@@ -324,7 +421,7 @@ class ChatViewModel(
     }
 
     fun updateModelEditor(state: ModelEditorState) {
-        modelEditor.value = state
+        modelEditor.value = state.copy(connectionTestResult = null)
     }
 
     fun updateModelEditorProtocol(protocol: ApiProtocol) {
@@ -334,6 +431,7 @@ class ChatViewModel(
         modelEditor.value = current.copy(
             protocol = protocol,
             baseUrl = if (shouldReplaceBaseUrl) defaultBaseUrl(protocol) else current.baseUrl,
+            connectionTestResult = null,
         )
     }
 
@@ -344,6 +442,7 @@ class ChatViewModel(
             protocol = preset.protocol,
             baseUrl = preset.baseUrl,
             modelName = preset.modelName,
+            connectionTestResult = null,
         )
     }
 
@@ -367,6 +466,55 @@ class ChatViewModel(
                 modelEditor.value = null
             } catch (throwable: Throwable) {
                 errorMessage.value = throwable.message ?: "保存模型失败"
+            }
+        }
+    }
+
+    fun testModelEditorConnection() {
+        val state = modelEditor.value ?: return
+        if (state.isTestingConnection) return
+        val apiKey = state.apiKey.trim()
+        if (state.displayName.isBlank() || state.baseUrl.isBlank() || state.modelName.isBlank()) {
+            errorMessage.value = "请先填写显示名称、Base URL 和模型名称"
+            return
+        }
+        viewModelScope.launch {
+            modelEditor.value = modelEditor.value?.copy(
+                isTestingConnection = true,
+                connectionTestResult = null,
+            )
+            try {
+                val fallbackKey = if (apiKey.isBlank() && state.id != null) {
+                    repository.getModelWithKey(state.id)?.apiKey.orEmpty()
+                } else {
+                    ""
+                }
+                val keyForTest = apiKey.ifBlank { fallbackKey }
+                if (keyForTest.isBlank()) error("请先填写 API Key")
+                val result = repository.testModelConnection(
+                    ModelConfigWithKey(
+                        id = state.id ?: "connection-test",
+                        displayName = state.displayName.trim(),
+                        protocol = state.protocol,
+                        baseUrl = state.baseUrl.trim().trimEnd('/'),
+                        modelName = state.modelName.trim(),
+                        streamEnabled = state.streamEnabled,
+                        isDefault = state.isDefault,
+                        apiKey = keyForTest,
+                    ),
+                )
+                modelEditor.value = modelEditor.value?.copy(
+                    isTestingConnection = false,
+                    connectionTestResult = "连接成功：$result",
+                )
+                errorMessage.value = "模型连接成功"
+            } catch (throwable: Throwable) {
+                val message = throwable.message ?: "连接测试失败"
+                modelEditor.value = modelEditor.value?.copy(
+                    isTestingConnection = false,
+                    connectionTestResult = "连接失败：$message",
+                )
+                errorMessage.value = "连接失败：$message"
             }
         }
     }
@@ -483,6 +631,7 @@ class ChatViewModel(
         private const val MAX_INPUT_LENGTH = 12_000
         private const val STREAM_PERSIST_CHARS = 80
         private const val STREAM_PERSIST_INTERVAL_MS = 120L
+        private const val CONTINUE_PROMPT = "请继续上一条回答，不要重复已经说过的内容。"
 
         fun factory(repository: ChatRepository): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {

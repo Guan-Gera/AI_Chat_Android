@@ -28,11 +28,20 @@ data class ModelEditorState(
     val streamEnabled: Boolean = true,
     val isDefault: Boolean = false,
     val isEditing: Boolean = false,
+    val isTestingConnection: Boolean = false,
+    val connectionTestResult: String? = null,
 )
 
 data class RenameDialogState(
     val conversationId: Long,
     val title: String,
+)
+
+data class EditMessageDialogState(
+    val messageId: Long,
+    val conversationId: Long,
+    val createdAt: Long,
+    val content: String,
 )
 
 data class ConfirmDialogState(
@@ -56,6 +65,7 @@ data class ChatUiState(
     val activeScreen: AppScreen = AppScreen.CHAT,
     val modelEditor: ModelEditorState? = null,
     val renameDialog: RenameDialogState? = null,
+    val editMessageDialog: EditMessageDialogState? = null,
     val confirmDialog: ConfirmDialogState? = null,
 ) {
     val selectedModel: ModelConfigEntity?
